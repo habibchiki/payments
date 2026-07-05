@@ -1,65 +1,57 @@
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch');
 const crypto = require('crypto');
 
 const app = express();
 
-// 1. Настройка CORS — разрешает Taplink отправлять запросы на этот сервер
+// Разрешаем запросы со стороны Taplink
 app.use(cors());
 
-// 2. Правильный парсинг данных для Serverless-среды Vercel
+// Парсинг JSON для Vercel
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Тестовый маршрут (для проверки работоспособности сервера в браузере)
+// Тестовый роут
 app.get('/', (req, res) => {
     res.json({ status: "server is running" });
 });
 
-// Главный маршрут для создания платежной сессии
+// Основной маршрут для создания платежа в Т-Банке
 app.post('/create-payment', async (req, res) => {
     try {
         const { amount, description } = req.body;
 
-        // Базовая проверка входящих данных
         if (!amount) {
             return res.status(400).json({ error: "Не указана сумма платежа" });
         }
 
-        // Загружаем секретные ключи из переменных окружения Vercel (Environment Variables)
         const terminalKey = process.env.TERMINAL_KEY;
         const password = process.env.PASSWORD;
-        
+
         if (!terminalKey || !password) {
-            console.error('КРИТИЧЕСКАЯ ОШИБКА: Ключи TERMINAL_KEY или PASSWORD не настроены в Vercel!');
-            return res.status(500).json({ error: "Ошибка конфигурации сервера (отсутствуют ключи)" });
+            return res.status(500).json({ error: "Ключи оплаты не настроены в Environment Variables на Vercel" });
         }
 
-        // Генерируем уникальный номер заказа, чтобы банк его принял
         const orderId = `order_${Date.now()}`;
 
-        // 3. Сборка объекта для расчета SHA-256 подписи (токена) по правилам Т-Банка
-        // ВНИМАНИЕ: Пароль участвует в генерации токена, но НЕ отправляется в запросе!
+        // Сборка токена по правилам Т-Банка
         const dataForSign = {
             Amount: amount,
-            Description: description || 'Оплата',
+            Description: description || 'Оплата по свободной сумме',
             OrderId: orderId,
             Password: password,
             TerminalKey: terminalKey
         };
 
-        // Сортируем ключи по алфавиту и конкатенируем их значения
         const sortedKeys = Object.keys(dataForSign).sort();
         let signString = '';
         sortedKeys.forEach(key => {
             signString += dataForSign[key];
         });
 
-        // Хешируем строку через sha256 в hex-формат
         const token = crypto.createHash('sha256').update(signString).digest('hex');
 
-        // 4. Отправка запроса на инициализацию платежа в Т-Банк
+        // Отправка запроса с помощью встроенного глобального fetch
         const tbankResponse = await fetch('https://securepay.tinkoff.ru/v2/Init', {
             method: 'POST',
             headers: {
@@ -69,30 +61,25 @@ app.post('/create-payment', async (req, res) => {
                 TerminalKey: terminalKey,
                 Amount: amount,
                 OrderId: orderId,
-                Description: description || 'Оплата',
-                Token: token // Сгенерированный токен безопасности
+                Description: description || 'Оплата по свободной сумме',
+                Token: token
             })
         });
 
         const tbankData = await tbankResponse.json();
 
-        // 5. Обработка ответа от банка
         if (tbankData.Success && tbankData.PaymentURL) {
-            // Если банк всё одобрил, возвращаем ссылку фронтенду (Taplink)
             return res.json({ paymentUrl: tbankData.PaymentURL });
         } else {
-            // Если банк вернул ошибку, логируем её и отдаем клиенту
-            console.error('Ошибка банка:', tbankData);
             return res.status(400).json({
-                error: tbankData.Message || tbankData.Details || 'Ошибка инициализации платежа в банке'
+                error: tbankData.Message || 'Ошибка инициализации платежа банком'
             });
         }
 
     } catch (error) {
-        console.error('Системная ошибка бэкенда:', error);
-        return res.status(500).json({ error: 'Внутренняя ошибка сервера оплаты' });
+        console.error('Ошибка:', error);
+        return res.status(500).json({ error: 'Внутренняя ошибка сервера платежей' });
     }
 });
 
-// Экспортируем модуль для корректной работы Vercel в режиме Serverless
 module.exports = app;
