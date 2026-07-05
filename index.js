@@ -4,27 +4,18 @@ const crypto = require('crypto');
 
 const app = express();
 
-// Разрешаем CORS со всех доменов без ограничений
+// Разрешаем CORS для Taplink
 app.use(cors({ origin: '*' }));
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Обрабатываем OPTIONS пред-запросы вручную на корневом уровне
-app.options('*', (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    res.sendStatus(200);
-});
-
-// Тестовый роут проверки
-app.get('/', (req, res) => {
+// Тестовый роут для проверки в браузере
+app.get('/api', (req, res) => {
     res.json({ status: "server is running" });
 });
 
-// Главный роут создания платежа
-app.post('/create-payment', async (req, res) => {
+// Реальный роут, куда будет стучаться Taplink
+app.post('/api/create-payment', async (req, res) => {
     try {
         const { amount, description } = req.body;
 
@@ -36,14 +27,14 @@ app.post('/create-payment', async (req, res) => {
         const password = process.env.PASSWORD;
 
         if (!terminalKey || !password) {
-            return res.status(500).json({ error: "Ключи оплаты не найдены в настройках Vercel" });
+            return res.status(500).json({ error: "Ключи оплаты не настроены в Vercel" });
         }
 
         const orderId = `order_${Date.now()}`;
 
         const dataForSign = {
             Amount: amount,
-            Description: description || 'Оплата',
+            Description: description || 'Оплата по свободной сумме',
             OrderId: orderId,
             Password: password,
             TerminalKey: terminalKey
@@ -64,7 +55,7 @@ app.post('/create-payment', async (req, res) => {
                 TerminalKey: terminalKey,
                 Amount: amount,
                 OrderId: orderId,
-                Description: description || 'Оплата',
+                Description: description || 'Оплата по свободной сумме',
                 Token: token
             })
         });
@@ -79,7 +70,7 @@ app.post('/create-payment', async (req, res) => {
 
     } catch (error) {
         console.error(error);
-        return res.status(500).json({ error: 'Внутренняя ошибка бэкенда' });
+        return res.status(500).json({ error: 'Внутренняя ошибка сервера' });
     }
 });
 
