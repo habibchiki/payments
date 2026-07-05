@@ -4,19 +4,24 @@ const crypto = require('crypto');
 
 const app = express();
 
-// Разрешаем запросы со стороны Taplink
-app.use(cors());
+// Разрешаем CORS
+app.use(cors({ origin: true, credentials: true }));
 
-// Парсинг JSON для Vercel
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Тестовый роут
+// Специальный обработчик проверочных запросов OPTIONS
+app.options('*', (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,PATCH,DELETE,POST,PUT");
+    res.setHeader("Access-Control-Allow-Headers", "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version");
+    res.sendStatus(200);
+});
+
 app.get('/', (req, res) => {
     res.json({ status: "server is running" });
 });
 
-// Основной маршрут для создания платежа в Т-Банке
 app.post('/create-payment', async (req, res) => {
     try {
         const { amount, description } = req.body;
@@ -29,12 +34,11 @@ app.post('/create-payment', async (req, res) => {
         const password = process.env.PASSWORD;
 
         if (!terminalKey || !password) {
-            return res.status(500).json({ error: "Ключи оплаты не настроены в Environment Variables на Vercel" });
+            return res.status(500).json({ error: "Ключи оплаты не настроены в Vercel" });
         }
 
         const orderId = `order_${Date.now()}`;
 
-        // Сборка токена по правилам Т-Банка
         const dataForSign = {
             Amount: amount,
             Description: description || 'Оплата по свободной сумме',
@@ -51,12 +55,9 @@ app.post('/create-payment', async (req, res) => {
 
         const token = crypto.createHash('sha256').update(signString).digest('hex');
 
-        // Отправка запроса с помощью встроенного глобального fetch
         const tbankResponse = await fetch('https://securepay.tinkoff.ru/v2/Init', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 TerminalKey: terminalKey,
                 Amount: amount,
@@ -71,15 +72,14 @@ app.post('/create-payment', async (req, res) => {
         if (tbankData.Success && tbankData.PaymentURL) {
             return res.json({ paymentUrl: tbankData.PaymentURL });
         } else {
-            return res.status(400).json({
-                error: tbankData.Message || 'Ошибка инициализации платежа банком'
-            });
+            return res.status(400).json({ error: tbankData.Message || 'Ошибка банка' });
         }
 
     } catch (error) {
-        console.error('Ошибка:', error);
-        return res.status(500).json({ error: 'Внутренняя ошибка сервера платежей' });
+        console.error(error);
+        return res.status(500).json({ error: 'Внутренняя ошибка сервера' });
     }
 });
 
 module.exports = app;
+
