@@ -28,34 +28,29 @@ app.post('/create-payment', async (req, res) => {
     try {
         const { amount, description } = req.body;
 
-        if (!amount) {
-            return res.status(400).json({ error: "Не указана сумма платежа" });
-        }
+if (!amount || !terminalKey || !password) {
+    return res.status(400).json({ error: "Отсутствуют обязательные параметры" });
+}
 
-        const terminalKey = process.env.TERMINAL_KEY;
-        const password = process.env.PASSWORD;
+const orderId = `order_${Date.now()}`;
 
-        if (!terminalKey || !password) {
-            return res.status(500).json({ error: "Ключи оплаты не найдены в настройках Vercel" });
-        }
+const dataForSign = {
+    Amount: amount.toString(),           // обязательно строка!
+    Description: description || 'Оплата',
+    OrderId: orderId,
+    Password: password,
+    TerminalKey: terminalKey
+};
 
-        const orderId = `order_${Date.now()}`;
+// Сортируем ключи по алфавиту
+const sortedKeys = Object.keys(dataForSign).sort();
+let signString = '';
 
-        const dataForSign = {
-            Amount: amount,
-            Description: description || 'Оплата',
-            OrderId: orderId,
-            Password: password,
-            TerminalKey: terminalKey
-        };
+sortedKeys.forEach(key => {
+    signString += dataForSign[key];
+});
 
-        const sortedKeys = Object.keys(dataForSign).sort();
-        let signString = '';
-        sortedKeys.forEach(key => {
-            signString += dataForSign[key];
-        });
-
-        const token = crypto.createHash('sha256').update(signString).digest('hex');
+const token = crypto.createHash('sha256').update(signString).digest('hex');
 
         const tbankResponse = await fetch('https://securepay.tinkoff.ru/v2/Init', {
             method: 'POST',
