@@ -4,58 +4,58 @@ const crypto = require('crypto');
 
 const app = express();
 
-// Разрешаем CORS со всех доменов без ограничений
 app.use(cors({ origin: '*' }));
-
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// Обрабатываем OPTIONS пред-запросы вручную на корневом уровне
-app.options('*', (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    res.sendStatus(200);
-});
-
-// Тестовый роут проверки
 app.get('/', (req, res) => {
-    res.json({ status: "server is running" });
+    res.json({ status: 'server is running' });
 });
 
-// Главный роут создания платежа
 app.post('/create-payment', async (req, res) => {
     try {
         const { amount, description } = req.body;
-const terminalKey = process.env.TERMINAL_KEY;
-const password = process.env.TERMINAL_PASSWORD;
-if (!amount || !terminalKey || !password) {
-    return res.status(400).json({ error: "Отсутствуют обязательные параметры" });
-}
 
-const orderId = `order_${Date.now()}`;
+        const terminalKey = process.env.TERMINAL_KEY;
+        const password = process.env.TERMINAL_PASSWORD;
 
-const dataForSign = {
-    Amount: amount.toString(),           // обязательно строка!
-    Description: description || 'Оплата',
-    OrderId: orderId,
-    Password: password,
-    TerminalKey: terminalKey
-};
+        if (!amount) {
+            return res.status(400).json({ error: 'Не указана сумма' });
+        }
 
-// Сортируем ключи по алфавиту
-const sortedKeys = Object.keys(dataForSign).sort();
-let signString = '';
+        if (!terminalKey || !password) {
+            return res.status(500).json({ error: 'Не настроены ENV переменные' });
+        }
 
-sortedKeys.forEach(key => {
-    signString += dataForSign[key];
-});
+        const orderId = `order_${Date.now()}`;
 
-const token = crypto.createHash('sha256').update(signString).digest('hex');
+        const dataForSign = {
+            Amount: String(amount),
+            Description: description || 'Оплата',
+            OrderId: orderId,
+            Password: password,
+            TerminalKey: terminalKey
+        };
 
-        const tbankResponse = await fetch('https://securepay.tinkoff.ru/v2/Init', {
+        const token = crypto
+            .createHash('sha256')
+            .update(
+                Object.keys(dataForSign)
+                    .sort()
+                    .map(key => dataForSign[key])
+                    .join('')
+            )
+            .digest('hex');
+
+        console.log('Создание платежа:', {
+            Amount: amount,
+            OrderId: orderId
+        });
+
+        const response = await fetch('https://securepay.tinkoff.ru/v2/Init', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json'
+            },
             body: JSON.stringify({
                 TerminalKey: terminalKey,
                 Amount: amount,
@@ -65,17 +65,24 @@ const token = crypto.createHash('sha256').update(signString).digest('hex');
             })
         });
 
-        const tbankData = await tbankResponse.json();
+        const result = await response.json();
 
-        if (tbankData.Success && tbankData.PaymentURL) {
-            return res.json({ paymentUrl: tbankData.PaymentURL });
-        } else {
-            return res.status(400).json({ error: tbankData.Message || 'Ошибка банка' });
+        console.log('Ответ Т-Банка:', result);
+
+        if (!result.Success) {
+            return res.status(400).json(result);
         }
 
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ error: 'Внутренняя ошибка бэкенда' });
+        return res.json({
+            paymentUrl: result.PaymentURL
+        });
+
+    } catch (err) {
+        console.error(err);
+
+        return res.status(500).json({
+            error: err.message
+        });
     }
 });
 
