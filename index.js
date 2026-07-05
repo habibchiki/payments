@@ -27,7 +27,8 @@ app.get('/', (req, res) => {
 app.post('/create-payment', async (req, res) => {
     try {
         const { amount, description } = req.body;
-
+const terminalKey = process.env.TERMINAL_KEY;
+const password = process.env.TERMINAL_PASSWORD;
 if (!amount || !terminalKey || !password) {
     return res.status(400).json({ error: "Отсутствуют обязательные параметры" });
 }
