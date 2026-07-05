@@ -1,88 +1,98 @@
 const express = require('express');
-const cors = require('cors');//<--добавила
+const cors = require('cors');
 const fetch = require('node-fetch');
 const crypto = require('crypto');
 
 const app = express();
-app.use(cors());//добавила
+
+// 1. Настройка CORS — разрешает Taplink отправлять запросы на этот сервер
+app.use(cors());
+
+// 2. Правильный парсинг данных для Serverless-среды Vercel
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// === КЛЮЧИ ИЗ SECRETS ===
-const TERMINAL_KEY = process.env.TERMINAL_KEY;
-const PASSWORD = process.env.PASSWORD;
+// Тестовый маршрут (для проверки работоспособности сервера в браузере)
+app.get('/', (req, res) => {
+    res.json({ status: "server is running" });
+});
 
-// Функция генерации токена по правилам Т-Банка
-function generateToken(params) {
-    const sortedKeys = Object.keys(params).sort();
-    let str = '';
-
-    for (let key of sortedKeys) {
-        if (key !== 'Token' && key !== 'Receipt' && params[key] !== undefined && params[key] !== null && params[key] !== '') {
-            str += params[key];
-        }
-    }
-
-    str += PASSWORD;
-    return crypto.createHash('sha256').update(str).digest('hex');
-}
-
-// Маршрут для создания платежа
+// Главный маршрут для создания платежной сессии
 app.post('/create-payment', async (req, res) => {
-    const { amount, orderId, description = 'Оплата по свободной сумме', email } = req.body;
-
-    if (!amount || amount < 1000) { // минимум 10 руб = 1000 копеек
-        return res.status(400).json({ error: 'Минимальная сумма 10 руб.' });
-    }
-
-    const payload = {
-        TerminalKey: TERMINAL_KEY,
-        Amount: amount,
-        OrderId: orderId || 'order_' + Date.now(),
-        Description: description,
-        SuccessURL: 'https://твоя-страница-taplink/success', // поменяй на свою ссылку позже
-        FailURL: 'https://твоя-страница-taplink/fail',     // поменяй на свою ссылку позже
-        Receipt: {
-            Email: email || 'customer@example.com',
-            Taxation: 'usn_income',
-            Items: [{
-                Name: description,
-                Price: amount,
-                Quantity: 1,
-                Amount: amount,
-                Tax: 'none'
-            }]
-        }
-    };
-
-    payload.Token = generateToken(payload);
-
     try {
-        const response = await fetch('https://securepay.tinkoff.ru/v2/Init', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+        const { amount, description } = req.body;
+
+        // Базовая проверка входящих данных
+        if (!amount) {
+            return res.status(400).json({ error: "Не указана сумма платежа" });
+        }
+
+        // Загружаем секретные ключи из переменных окружения Vercel (Environment Variables)
+        const terminalKey = process.env.TERMINAL_KEY;
+        const password = process.env.PASSWORD;
+        
+        if (!terminalKey || !password) {
+            console.error('КРИТИЧЕСКАЯ ОШИБКА: Ключи TERMINAL_KEY или PASSWORD не настроены в Vercel!');
+            return res.status(500).json({ error: "Ошибка конфигурации сервера (отсутствуют ключи)" });
+        }
+
+        // Генерируем уникальный номер заказа, чтобы банк его принял
+        const orderId = `order_${Date.now()}`;
+
+        // 3. Сборка объекта для расчета SHA-256 подписи (токена) по правилам Т-Банка
+        // ВНИМАНИЕ: Пароль участвует в генерации токена, но НЕ отправляется в запросе!
+        const dataForSign = {
+            Amount: amount,
+            Description: description || 'Оплата',
+            OrderId: orderId,
+            Password: password,
+            TerminalKey: terminalKey
+        };
+
+        // Сортируем ключи по алфавиту и конкатенируем их значения
+        const sortedKeys = Object.keys(dataForSign).sort();
+        let signString = '';
+        sortedKeys.forEach(key => {
+            signString += dataForSign[key];
         });
 
-        const data = await response.json();
+        // Хешируем строку через sha256 в hex-формат
+        const token = crypto.createHash('sha256').update(signString).digest('hex');
 
-        if (data.PaymentURL) {
-            res.json({ paymentUrl: data.PaymentURL });
+        // 4. Отправка запроса на инициализацию платежа в Т-Банк
+        const tbankResponse = await fetch('https://securepay.tinkoff.ru/v2/Init', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                TerminalKey: terminalKey,
+                Amount: amount,
+                OrderId: orderId,
+                Description: description || 'Оплата',
+                Token: token // Сгенерированный токен безопасности
+            })
+        });
+
+        const tbankData = await tbankResponse.json();
+
+        // 5. Обработка ответа от банка
+        if (tbankData.Success && tbankData.PaymentURL) {
+            // Если банк всё одобрил, возвращаем ссылку фронтенду (Taplink)
+            return res.json({ paymentUrl: tbankData.PaymentURL });
         } else {
-            res.status(400).json({ error: data.Message || 'Ошибка банка' });
+            // Если банк вернул ошибку, логируем её и отдаем клиенту
+            console.error('Ошибка банка:', tbankData);
+            return res.status(400).json({
+                error: tbankData.Message || tbankData.Details || 'Ошибка инициализации платежа в банке'
+            });
         }
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+
+    } catch (error) {
+        console.error('Системная ошибка бэкенда:', error);
+        return res.status(500).json({ error: 'Внутренняя ошибка сервера оплаты' });
     }
 });
 
-// Тестовый маршрут, чтобы проверить работоспособность
-app.get('/', (req, res) => {
-    res.json({ status: 'server is running 🚀' });
-});
-
-// ОБЯЗАТЕЛЬНО ДЛЯ REPLIT: Запуск сервера на правильном порту
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Сервер запущен на порту ${PORT}`);
-});
+// Экспортируем модуль для корректной работы Vercel в режиме Serverless
+module.exports = app;
