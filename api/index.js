@@ -4,25 +4,24 @@ const crypto = require('crypto');
 
 const app = express();
 
-// Разрешаем CORS
-app.use(cors({ origin: true, credentials: true }));
-
+// Полное открытие CORS для любых входящих запросов
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Специальный обработчик проверочных запросов OPTIONS
+// Обработчик проверочных OPTIONS-запросов, который вернет статус 200 без редиректов
 app.options('*', (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,PATCH,DELETE,POST,PUT");
-    res.setHeader("Access-Control-Allow-Headers", "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version");
+    res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     res.sendStatus(200);
 });
 
-app.get('/', (req, res) => {
+app.get('/api/index', (req, res) => {
     res.json({ status: "server is running" });
 });
 
-app.post('/create-payment', async (req, res) => {
+app.post('/api/index/create-payment', async (req, res) => {
     try {
         const { amount, description } = req.body;
 
@@ -82,4 +81,3 @@ app.post('/create-payment', async (req, res) => {
 });
 
 module.exports = app;
-
