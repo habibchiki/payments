@@ -1,89 +1,92 @@
-const express = require('express');
-const cors = require('cors');
-const crypto = require('crypto');
+const crypto = require("crypto");
 
-const app = express();
+module.exports = async (req, res) => {
+    // CORS
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-app.use(cors({ origin: '*' }));
-app.use(express.json());
+    if (req.method === "OPTIONS") {
+        return res.status(200).end();
+    }
 
-app.get('/', (req, res) => {
-    res.json({ status: 'server is running' });
-});
+    if (req.method !== "POST") {
+        return res.status(405).json({
+            error: "Method Not Allowed"
+        });
+    }
 
-app.post('/create-payment', async (req, res) => {
     try {
-        const { amount, description } = req.body;
-
         const terminalKey = process.env.TERMINAL_KEY;
         const password = process.env.TERMINAL_PASSWORD;
 
-        if (!amount) {
-            return res.status(400).json({ error: 'Не указана сумма' });
+        if (!terminalKey || !password) {
+            return res.status(500).json({
+                error: "TERMINAL_KEY или TERMINAL_PASSWORD не настроены"
+            });
         }
 
-        if (!terminalKey || !password) {
-            return res.status(500).json({ error: 'Не настроены ENV переменные' });
+        const { amount, description } = req.body;
+
+        if (!amount || Number(amount) < 1000) {
+            return res.status(400).json({
+                error: "Минимальная сумма 10 рублей"
+            });
         }
 
         const orderId = `order_${Date.now()}`;
 
-        const dataForSign = {
+        const signData = {
             Amount: String(amount),
-            Description: description || 'Оплата',
+            Description: description || "Оплата",
             OrderId: orderId,
             Password: password,
             TerminalKey: terminalKey
         };
 
         const token = crypto
-            .createHash('sha256')
+            .createHash("sha256")
             .update(
-                Object.keys(dataForSign)
+                Object.keys(signData)
                     .sort()
-                    .map(key => dataForSign[key])
-                    .join('')
+                    .map(k => signData[k])
+                    .join("")
             )
-            .digest('hex');
+            .digest("hex");
 
-        console.log('Создание платежа:', {
-            Amount: amount,
-            OrderId: orderId
-        });
-
-        const response = await fetch('https://securepay.tinkoff.ru/v2/Init', {
-            method: 'POST',
+        const response = await fetch("https://securepay.tinkoff.ru/v2/Init", {
+            method: "POST",
             headers: {
-                'Content-Type': 'application/json'
+                "Content-Type": "application/json"
             },
             body: JSON.stringify({
                 TerminalKey: terminalKey,
-                Amount: amount,
+                Amount: Number(amount),
                 OrderId: orderId,
-                Description: description || 'Оплата',
+                Description: description || "Оплата",
                 Token: token
             })
         });
 
-        const result = await response.json();
+        const data = await response.json();
 
-        console.log('Ответ Т-Банка:', result);
+        console.log(data);
 
-        if (!result.Success) {
-            return res.status(400).json(result);
+        if (!data.Success) {
+            return res.status(400).json(data);
         }
 
-        return res.json({
-            paymentUrl: result.PaymentURL
+        return res.status(200).json({
+            paymentUrl: data.PaymentURL
         });
 
-    } catch (err) {
-        console.error(err);
+    } catch (e) {
+
+        console.error(e);
 
         return res.status(500).json({
-            error: err.message
+            error: e.message
         });
-    }
-});
 
-module.exports = app;
+    }
+};
